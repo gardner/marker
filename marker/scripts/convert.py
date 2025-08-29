@@ -39,6 +39,25 @@ configure_logging()
 logger = get_logger()
 
 
+def find_files(in_folder, recursive=False):
+    """Find all PDF files in the input folder."""
+    # Focus on PDF files only for batch processing
+    files = []
+
+    if recursive:
+        # Walk directory tree recursively to find PDF files
+        for root, dirs, file_list in os.walk(in_folder):
+            for f in file_list:
+                if f.lower().endswith('.pdf'):
+                    files.append(os.path.join(root, f))
+    else:
+        # Original behavior - only files in the immediate directory
+        files = [os.path.join(in_folder, f) for f in os.listdir(in_folder)]
+        files = [f for f in files if os.path.isfile(f) and f.lower().endswith('.pdf')]
+
+    return files
+
+
 def worker_init():
     model_dict = create_model_dict()
 
@@ -112,7 +131,7 @@ def process_single_pdf(args):
     help="Number of chunks being processed in parallel",
 )
 @click.option(
-    "--max_files", type=int, default=None, help="Maximum number of pdfs to convert"
+    "--max_files", type=int, default=None, help="Maximum number of PDFs to convert"
 )
 @click.option(
     "--skip_existing",
@@ -135,12 +154,19 @@ def process_single_pdf(args):
     default=None,
     help="Number of worker processes to use.  Set automatically by default, but can be overridden.",
 )
+@click.option(
+    "--recursive",
+    is_flag=True,
+    default=False,
+    help="Process directories recursively to find all PDF files.",
+)
 @ConfigParser.common_options
 def convert_cli(in_folder: str, **kwargs):
     total_pages = 0
     in_folder = os.path.abspath(in_folder)
-    files = [os.path.join(in_folder, f) for f in os.listdir(in_folder)]
-    files = [f for f in files if os.path.isfile(f)]
+
+    # Use new recursive file discovery function for PDF files
+    files = find_files(in_folder, recursive=kwargs.get("recursive", False))
 
     # Handle chunks if we're processing in parallel
     # Ensure we get all files into a chunk
@@ -180,8 +206,9 @@ def convert_cli(in_folder: str, **kwargs):
         )
         kwargs.update(batch_sizes)
 
+        mode_info = "recursively" if kwargs.get("recursive", False) else "in directory"
         logger.info(
-            f"Converting {len(files_to_convert)} pdfs in chunk {kwargs['chunk_idx'] + 1}/{kwargs['num_chunks']} with {total_processes} processes and saving to {kwargs['output_dir']}"
+            f"Converting {len(files_to_convert)} PDFs {mode_info} in chunk {kwargs['chunk_idx'] + 1}/{kwargs['num_chunks']} with {total_processes} processes and saving to {kwargs['output_dir']}"
         )
         task_args = [(f, kwargs) for f in files_to_convert]
 

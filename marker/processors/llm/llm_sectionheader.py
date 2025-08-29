@@ -1,5 +1,5 @@
 import json
-from typing import List, Tuple
+from typing import List, Tuple, Literal
 
 from tqdm import tqdm
 
@@ -76,17 +76,22 @@ Section Headers
 ```
 Output:
 Analysis: The first section header is missing the h1 tag, and the second section header is missing the h2 tag.
+correction_type: corrections_needed
 ```json
-[
-    {
-        "id": "/page/0/SectionHeader/1",
-        "html": "<h1>1 Vector Operations</h1>"
-    },
-    {
-        "id": "/page/0/SectionHeader/2",
-        "html": "<h2>1.1 Vector Addition</h2>"
-    }
-]
+{
+    "analysis": "The first section header is missing the h1 tag, and the second section header is missing the h2 tag.",
+    "correction_type": "corrections_needed",
+    "blocks": [
+        {
+            "id": "/page/0/SectionHeader/1",
+            "html": "<h1>1 Vector Operations</h1>"
+        },
+        {
+            "id": "/page/0/SectionHeader/2",
+            "html": "<h2>1.1 Vector Addition</h2>"
+        }
+    ]
+}
 ```
 
 **Input:**
@@ -125,18 +130,22 @@ Section Headers
         response = self.llm_service(
             prompt, None, document.pages[0], SectionHeaderSchema
         )
-        logger.debug(f"Got section header reponse from LLM: {response}")
+        logger.debug(f"Got section header response from LLM: {response}")
 
         if not response or "correction_type" not in response:
             logger.warning("LLM did not return a valid response")
             return
 
+# Explicit validation for correction_type values from LLM
         correction_type = response["correction_type"]
         if correction_type == "no_corrections":
             return
-
-        self.load_blocks(response)
-        self.handle_rewrites(response["blocks"], document)
+        elif correction_type == "corrections_needed":
+            self.load_blocks(response)
+            self.handle_rewrites(response["blocks"], document)
+        else:
+            logger.warning(f"Unknown correction type: {correction_type}")
+            return
 
     def load_blocks(self, response):
         if isinstance(response["blocks"], str):
@@ -169,7 +178,8 @@ class BlockSchema(BaseModel):
     html: str
 
 
+# Enum validation for correction_type prevents invalid LLM responses
 class SectionHeaderSchema(BaseModel):
     analysis: str
-    correction_type: str
+    correction_type: Literal["no_corrections", "corrections_needed"]
     blocks: List[BlockSchema]

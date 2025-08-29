@@ -1,6 +1,6 @@
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Annotated
+from typing import List, Annotated, Literal
 
 from marker.logger import get_logger
 from marker.processors.llm import BaseLLMComplexBlockProcessor
@@ -56,7 +56,7 @@ Here are the types of changes you can make in response to the prompt:
 - Make edits to block content by changing the HTML.
 
 Guidelines:
-- Only use the following tags: {{format_tags}}.  Do not use any other tags.  
+- Only use the following tags: {{format_tags}}.  Do not use any other tags.
 - The math tag can have the attribute `display="block"` to indicate display math, the a tag can have the attribute `href="..."` to indicate a link, and td and th tags can have the attribute `colspan="..."` and `rowspan="..."` to indicate table cells that span multiple columns or rows.  There can be a "block-type" attribute on p tags.  Do not use any other attributes.
 - Keep LaTeX formulas inside <math> tags - these are important for downstream processing.
 - Bboxes are normalized 0-1000
@@ -117,13 +117,84 @@ Ensure that all blocks have the correct labels, and that reading order is correc
 Output:
 Analysis: The blocks are in the correct reading order, but the first block should actually be a SectionHeader.
 ```json
+{
+    "analysis": "The blocks are in the correct reading order, but the first block should actually be a SectionHeader.",
+    "correction_type": "rewrite",
+    "blocks": [
+        {
+            "id": "/page/0/Text/1",
+            "block_type": "SectionHeader",
+            "html": "<h1>1.14 Vector Operations</h1>"
+        }
+    ]
+}
+```
+
+**Example 2: Reordering blocks**
+Input:
+Blocks
+```json
 [
     {
+        "bbox": [100, 200, 300, 250],
+        "id": "/page/0/Text/2",
+        "block_type": "Text",
+        "html": "<p>This is the second paragraph that should come first.</p>"
+    },
+    {
+        "bbox": [100, 100, 300, 150],
         "id": "/page/0/Text/1",
-        "block_type": "SectionHeader",
-        "html": "<h1>1.14 Vector Operations</h1>"
+        "block_type": "Text",
+        "html": "<p>This is the first paragraph.</p>"
     }
 ]
+```
+User Prompt
+Fix the reading order based on visual position.
+Output:
+Analysis: Block 2 should come before Block 1 based on vertical position.
+```json
+{
+    "analysis": "Block 2 should come before Block 1 based on vertical position.",
+    "correction_type": "reorder",
+    "blocks": [
+        {
+            "id": "/page/0/Text/1",
+            "block_type": "",
+            "html": ""
+        },
+        {
+            "id": "/page/0/Text/2",
+            "block_type": "",
+            "html": ""
+        }
+    ]
+}
+```
+
+**Example 3: No corrections needed**
+Input:
+Blocks
+```json
+[
+    {
+        "bbox": [100, 100, 300, 150],
+        "id": "/page/0/Text/1",
+        "block_type": "Text",
+        "html": "<p>Perfect content in correct order.</p>"
+    }
+]
+```
+User Prompt
+Check if everything is correct.
+Output:
+Analysis: All blocks are correctly formatted and in proper reading order.
+```json
+{
+    "analysis": "All blocks are correctly formatted and in proper reading order.",
+    "correction_type": "no_corrections",
+    "blocks": []
+}
 ```
 
 **Input:**
@@ -157,7 +228,7 @@ User Prompt
             .replace("{{user_prompt}}", self.block_correction_prompt)
         )
         response = self.llm_service(prompt, image, page1, PageSchema)
-        logger.debug(f"Got reponse from LLM: {response}")
+        logger.debug(f"Got response from LLM: {response}")
 
         if not response or "correction_type" not in response:
             logger.warning("LLM did not return a valid response")
@@ -185,17 +256,27 @@ User Prompt
             response["blocks"] = json.loads(response["blocks"])
 
     def handle_reorder(self, blocks: list, page1: PageGroup):
+        # IDs start with "/" and need proper parsing
+        def _parse_block_id(id_str: str) -> tuple[str, str, str, str]:
+            """Parse block ID format: /page/page_id/block_type/block_id"""
+            clean_id = id_str.strip().lstrip("/")
+            parts = clean_id.split("/")
+            if len(parts) != 4 or parts[0] != "page":
+                raise ValueError(f"Invalid block ID format: {id_str}")
+            return parts[0], parts[1], parts[2], parts[3]  # page, page_id, block_type, block_id
+
         unique_page_ids = set()
         document_page_ids = [str(page1.page_id)]
         document_pages = [page1]
 
+        # First pass: collect unique page IDs
         for block_data in blocks:
             try:
-                page_id, _, _ = block_data["id"].split("/")
+                _, page_id, _, _ = _parse_block_id(block_data["id"])
                 unique_page_ids.add(page_id)
             except Exception as e:
-                logger.debug(f"Error parsing block ID {block_data['id']}: {e}")
-                continue
+                logger.debug(f"Error parsing block ID {block_data.get('id')}: {e}")
+                return  # Fail fast on invalid input to prevent partial reorder
 
         if set(document_page_ids) != unique_page_ids:
             logger.debug(
@@ -203,46 +284,32 @@ User Prompt
             )
             return
 
+        # Process each page
         for page_id, document_page in zip(unique_page_ids, document_pages):
             block_ids_for_page = []
+
+            # Second pass: collect all block IDs for this page
             for block_data in blocks:
                 try:
-                    page_id, block_type, block_id = block_data["id"].split("/")
-                    block_id = BlockId(
-                        page_id=page_id,
-                        block_id=block_id,
-                        block_type=getattr(BlockTypes, block_type),
-                    )
-                    block_ids_for_page.append(block_id)
+                    _, parsed_page_id, block_type, block_id = _parse_block_id(block_data["id"])
+                    if parsed_page_id == page_id:
+                        block_id = BlockId(
+                            page_id=parsed_page_id,
+                            block_id=block_id,
+                            block_type=getattr(BlockTypes, block_type),
+                        )
+                        block_ids_for_page.append(block_id)
                 except Exception as e:
-                    logger.debug(f"Error parsing block ID {block_data['id']}: {e}")
-                    continue
+                    logger.debug(f"Error parsing block ID {block_data.get('id')}: {e}")
+                    return  # Fail fast on invalid input
 
-                # Both sides should have the same values, just be reordered
-                if not all(
-                    [
-                        block_id in document_page.structure
-                        for block_id in block_ids_for_page
-                    ]
-                ):
-                    logger.debug(
-                        f"Some blocks for page {page_id} not found in document"
-                    )
-                    continue
+            # Validate symmetry between response and document before applying changes
+            if set(block_ids_for_page) != set(document_page.structure):
+                logger.debug(f"Block mismatch for page {page_id} - aborting reorder")
+                return
 
-                if not all(
-                    [
-                        block_id in block_ids_for_page
-                        for block_id in document_page.structure
-                    ]
-                ):
-                    logger.debug(
-                        f"Some blocks in document page {page_id} not found in response"
-                    )
-                    continue
-
-                # Swap the order of blocks in the document page
-                document_page.structure = block_ids_for_page
+            # Apply reorder only after full validation
+            document_page.structure = block_ids_for_page
 
     def handle_rewrites(self, blocks: list, document: Document):
         for block_data in blocks:
@@ -275,7 +342,7 @@ User Prompt
             return
 
         pbar = tqdm(
-            total=max(1, total_blocks - 1),
+            total=total_blocks,
             desc=f"{self.__class__.__name__} running",
             disable=self.disable_tqdm,
         )
@@ -299,7 +366,8 @@ class BlockSchema(BaseModel):
     block_type: str
 
 
+# Enum validation for correction_type prevents invalid LLM responses
 class PageSchema(BaseModel):
     analysis: str
-    correction_type: str
+    correction_type: Literal["no_corrections", "reorder", "rewrite", "reorder_first"]
     blocks: List[BlockSchema]
