@@ -387,6 +387,7 @@ When running with the `--use_llm` flag, you have a choice of services you can us
 - `Ollama` - this will use local models.  You can configure `--ollama_base_url` and `--ollama_model`. To use it, set `--llm_service=marker.services.ollama.OllamaService`.
 - `Claude` - this will use the anthropic API.  You can configure `--claude_api_key`, and `--claude_model_name`.  To use it, set `--llm_service=marker.services.claude.ClaudeService`.
 - `OpenAI` - this supports any openai-like endpoint. You can configure `--openai_api_key`, `--openai_model`, and `--openai_base_url`. To use it, set `--llm_service=marker.services.openai.OpenAIService`.
+- `NVIDIA NIM` - this will use NVIDIA's hosted AI models through their OpenAI-compatible API. You can configure `--nvidia_api_key` and `--openai_model` (defaults to `meta/llama-4-maverick-17b-128e-instruct`). To use it, set `--llm_service=marker.services.nim.NvidiaService`.
 - `Azure OpenAI` - this uses the Azure OpenAI service. You can configure `--azure_endpoint`, `--azure_api_key`, and `--deployment_name`. To use it, set `--llm_service=marker.services.azure_openai.AzureOpenAIService`.
 
 These services may have additional optional configuration as well - you can see it by viewing the classes.
